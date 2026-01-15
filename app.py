@@ -24,48 +24,62 @@ with st.sidebar:
 
 # 3. 主逻辑
 if btn:
-    status_text = st.empty() # 创建一个动态显示状态的占位符
-    status_text.info(f"正在全网检索『{word}』相关资讯...")
+    status_text = st.empty()
+    status_text.info(f"正在全网检索关于『{word}』的主流媒体报道...")
     
+    # 1. 增加搜索深度，一次抓取20篇，方便我们从中筛选主流媒体
     url = "https://apis.tianapi.com/generalnews/index"
-    params = {"key": TIAN_API_KEY, "word": word, "num": num_limit}
+    params = {"key": TIAN_API_KEY, "word": word, "num": 20}
     
     try:
-        res = requests.get(url, params=params, timeout=10).json()
+        res = requests.get(url, params=params, timeout=15).json()
         
-        # 关键词未搜到则自动切换到热点资讯
-        if res.get("code") == 250:
-            st.warning(f"暂无『{word}』的高匹配度新闻，为您推送今日热点资讯：")
-            res = requests.get("https://apis.tianapi.com/guonei/index", params={"key": TIAN_API_KEY, "num": num_limit}).json()
-
         if res.get("code") == 200:
-            status_text.success("数据获取成功，AI 正在编辑总结...")
+            all_news = res["result"]["newslist"]
             
-            for news in res["result"]["newslist"]:
-                # 使用带容器的排版，防止渲染白屏
+            # 2. 定义你想看到的主流媒体白名单
+            mainstream_keywords = ["新华", "澎湃", "人民网", "央视", "界面", "财新", "经济日报", "中国新闻网"]
+            
+            # 将新闻分类：主流媒体排在前面，其他排在后面
+            high_quality_news = [n for n in all_news if any(m in n['source'] for m in mainstream_keywords)]
+            other_news = [n for n in all_news if n not in high_quality_news]
+            
+            # 合并结果，只取前 num_limit 篇展示
+            final_list = (high_quality_news + other_news)[:num_limit]
+
+            status_text.success(f"已深度检索{len(all_news)}篇资讯，正在为您精选总结...")
+
+            for news in final_list:
                 with st.container(border=True):
-                    # AI 生成部分
-                    prompt = f"请为以下新闻写一个10字主标题、15字副标题和80字以内专业总结：\n标题：{news['title']}\n来源：{news['source']}"
+                    # 标记来源是否为权威媒体
+                    source_tag = "🔴【权威主流媒体】" if news in high_quality_news else "⚪【门户转播】"
                     
-                    try:
-                        completion = client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[{"role": "user", "content": prompt}],
-                            max_tokens=300
-                        )
-                        ai_content = completion.choices[0].message.content
-                        
-                        # 结果展示
-                        st.markdown(f"#### {news['title']}")
-                        st.caption(f"来源：{news['source']} | 时间：{news['ctime']}")
-                        st.write(ai_content)
-                        st.markdown(f"[🔗 阅读全文]({news['url']})")
-                    except Exception as ai_err:
-                        st.error("AI 总结超时，请稍后重试")
+                    # AI 提示词强化：要求模仿新华社/澎湃的社论风格
+                    prompt = f"""
+                    你是一位资深时政编辑。请根据以下素材撰写内参：
+                    1. 主标题：12字以内，严肃专业。
+                    2. 副标题：18字以内，包含核心人物/地点/事件。
+                    3. 总结：100字左右，客观干练，体现新闻深度。
+                    
+                    素材来源：{news['source']}
+                    素材标题：{news['title']}
+                    素材内容：{news['description']}
+                    """
+                    
+                    completion = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.3
+                    )
+                    
+                    st.markdown(f"#### {news['title']}")
+                    st.caption(f"{source_tag} | 来源：{news['source']} | 时间：{news['ctime']}")
+                    st.write(completion.choices[0].message.content)
+                    st.markdown(f"🔗 [阅读原发报道]({news['url']})")
             
-            status_text.empty() # 完成后清除状态提示
+            status_text.empty()
         else:
-            st.error(f"接口异常: {res.get('msg')}")
+            st.error(f"检索失败：{res.get('msg')} (代码: {res.get('code')})")
             
     except Exception as e:
-        st.error(f"连接超时或系统异常: {e}")
+        st.error(f"深度检索超时，请稍后重试: {e}")
