@@ -21,37 +21,33 @@ with st.sidebar:
 
 if btn:
     with st.spinner("正在检索并撰写总结..."):
-        # 强制使用“综合新闻”接口，请确保你在天行后台已申请该接口
+        # 尝试使用综合新闻接口
         url = "https://apis.tianapi.com/generalnews/index"
-        params = {
-            "key": TIAN_API_KEY,
-            "word": word,
-            "num": num
-        }
+        params = {"key": TIAN_API_KEY, "word": word, "num": num}
         
         try:
-            response = requests.get(url, params=params)
-            res_data = response.json()
+            res = requests.get(url, params=params).json()
             
-            if res_data.get("code") == 200:
-                news_list = res_data["result"]["newslist"]
-                for news in news_list:
-                    # AI 提示词优化
-                    prompt = f"你是一位资深编辑。请根据以下内容生成：1.主标题(10字) 2.副标题(15字) 3.总结段落(100字以内)。内容如下：\n标题：{news['title']}\n描述：{news['description']}"
+            # 如果关键词搜不到(250)，我们自动切换到“国内新闻”列表，保证页面不空白
+            if res.get("code") == 250:
+                st.warning(f"未找到关于『{word}』的特定新闻，已为您转为获取最新热点资讯。")
+                url = "https://apis.tianapi.com/guonei/index" # 切换到国内新闻接口
+                res = requests.get(url, params={"key": TIAN_API_KEY, "num": num}).json()
+
+            if res.get("code") == 200:
+                for news in res["result"]["newslist"]:
+                    prompt = f"请为以下新闻写一个10字主标题、15字副标题和100字以内的专业总结：\n标题：{news['title']}\n内容：{news['description']}"
                     
-                    completion = client.chat.completions.create(
+                    response = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[{"role": "user", "content": prompt}]
                     )
                     
-                    # 结果呈现
-                    st.markdown(f"### {news['title']}") # 原标题作为备选
-                    st.info(completion.choices[0].message.content)
-                    st.markdown(f"🔗 [查看新闻原文]({news['url']})")
+                    st.subheader(news['title'])
+                    st.info(response.choices[0].message.content)
+                    st.markdown(f"🔗 [查看原文]({news['url']})")
                     st.divider()
             else:
-                # 这里会打印出天行返回的具体错误代码
-                st.error(f"天行接口返回错误：{res_data.get('msg')} (代码: {res_data.get('code')})")
-                st.warning("提示：请确认你已在天行后台申请了『综合新闻』接口，而不仅仅是『国内新闻』。")
+                st.error(f"接口报错：{res.get('msg')} (代码: {res.get('code')})")
         except Exception as e:
-            st.error(f"程序运行异常: {e}")
+            st.error(f"发生错误：{e}")
