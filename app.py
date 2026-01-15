@@ -81,50 +81,47 @@ if btn:
     status_text = st.empty()
     status_text.info(f"正在通过『{search_mode}』路径检索相关资讯...")
     
-    # 定义主流权威媒体关键词
+    # 权威媒体白名单
     mainstream_keywords = ["新华", "澎湃", "人民网", "央视", "界面", "财新", "经济日报", "中国新闻网", "光明网", "中国证券报"]
     
     res = get_news_data(word, search_mode, area)
     
-    # 自动保底：如果特定搜索无结果，自动转为国内热点
-    if res.get("code") == 250:
-        st.warning(f"当前路径未检索到『{word}』深度结果，已为您切换至全局即时资讯...")
+    # 1. 结构化检查：确保 res 是字典且包含 code
+    if isinstance(res, dict) and res.get("code") == 250:
+        st.warning(f"当前路径未检索到『{word}』相关深度结果，已为您切换至全局即时资讯...")
         res = get_news_data(word, "即时热点(国内新闻)")
 
-    if res.get("code") == 200:
-        all_news = res["result"]["newslist"]
+    # 2. 核心修复：安全地提取数据，防止 KeyError
+    if isinstance(res, dict) and res.get("code") == 200:
+        # 使用 .get() 方式安全获取 result，如果不存在则返回空字典
+        result_data = res.get("result", {})
+        all_news = result_data.get("newslist", [])
         
-        # 筛选逻辑
+        if not all_news:
+            st.warning("接口连接成功，但暂无相关资讯内容，请稍后再试。")
+            st.stop()
+        
+        # 筛选与重排逻辑
         high_quality_news = [n for n in all_news if any(m in n.get('source', '') for m in mainstream_keywords)]
         other_news = [n for n in all_news if n not in high_quality_news]
         final_list = (high_quality_news + other_news)[:num_limit]
 
-        status_text.success(f"检索完成，正在生成内参简报：")
+        status_text.success(f"检索完成，正在生成分析简报：")
 
         for news in final_list:
             with st.container(border=True):
-                # 处理不同接口字段名不一致的问题
-                title = news.get('title') or news.get('keyword') or "无标题"
-                source = news.get('source') or "全网热搜"
-                content = news.get('description') or news.get('digest') or f"当前全网热议关键词：{title}"
-                ctime = news.get('ctime') or "实时更新"
+                # 兼容不同接口的字段名（解决地区新闻和热搜的差异）
+                title = news.get('title') or news.get('keyword') or "无标题资讯"
+                source = news.get('source') or "权威资讯源"
+                content = news.get('description') or news.get('digest') or f"关键词『{title}』当前热度极高，正在全网发酵中。"
+                ctime = news.get('ctime') or "实时"
                 
                 is_mainstream = any(m in source for m in mainstream_keywords)
                 tag = "🔴【权威主流】" if is_mainstream else "⚪【动态资讯】"
                 
-                # AI 提示词（针对不同来源自适应）
-                prompt = f"""
-                你是一位资深时政编辑。请根据以下素材撰写一份专业内参。
-                1. 主标题：12字以内，严肃客观。
-                2. 副标题：15字以内，点明事实。
-                3. 总结：100字左右，通稿风格，逻辑清晰。
-                
-                素材来源：{source}
-                素材标题：{title}
-                素材内容：{content}
-                """
-                
+                # AI 总结生成
                 try:
+                    prompt = f"你是一位新闻编辑。请根据以下素材写10字主标题、15字副标题和100字总结：\n来源：{source}\n标题：{title}\n内容：{content}"
                     completion = client.chat.completions.create(
                         model="gpt-4o-mini",
                         messages=[{"role": "user", "content": prompt}],
@@ -140,9 +137,11 @@ if btn:
                         st.markdown(completion.choices[0].message.content)
                         if news.get('url'):
                             st.markdown(f"🔗 [查看原发报道]({news['url']})")
-                except:
-                    st.error("AI 总结服务暂时繁忙")
+                except Exception as ai_err:
+                    st.error(f"AI 生成失败：{ai_err}")
         
         status_text.empty()
     else:
-        st.error(f"接口报错：{res.get('msg')} (代码: {res.get('code')})")
+        # 处理接口明确报错的情况
+        error_msg = res.get("msg") if isinstance(res, dict) else "未知连接错误"
+        st.error(f"路径请求异常：{error_msg} (请检查该接口是否已在天行后台申请)")
