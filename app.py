@@ -13,38 +13,62 @@ except Exception as e:
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 页面设置
-st.set_page_config(page_title="高级全网内参系统", layout="wide")
+st.set_page_config(page_title="高级全域新闻内参系统", layout="wide")
 st.title("🗞️ 智能全域新闻检索系统")
 
-# 2. 侧边栏配置
+# 2. 侧边栏配置：增加“地区新闻”和“全网热搜”
 with st.sidebar:
     st.header("检索设置")
     word = st.text_input("请输入核心关键词", "贺蛟龙")
     
-    # 允许用户选择检索模式，利用你拥有的不同接口
-    search_mode = st.radio("检索源选择", ["全域深度(互联网资讯)", "综合门户(综合新闻)", "即时热点(国内新闻)"])
+    # 增加更多接口路径
+    search_mode = st.radio(
+        "检索源路径选择", 
+        [
+            "全域深度(互联网资讯)", 
+            "综合门户(综合新闻)", 
+            "即时热点(国内新闻)", 
+            "垂直地区(地区新闻)", 
+            "全网风向(全网热搜)"
+        ]
+    )
     
+    # 如果选择地区新闻，增加一个省份/城市输入框
+    area = ""
+    if search_mode == "垂直地区(地区新闻)":
+        area = st.text_input("指定地区(如: 广东/上海/深圳)", "北京")
+
     num_limit = st.slider("最大生成篇数", 1, 10, 5)
     st.divider()
-    st.caption("系统将优先筛选：新华社、澎湃新闻、人民网、央视新闻等。")
-    btn = st.button("开始跨平台检索", type="primary")
+    st.caption("系统已集成：互联网/综合/国内/地区/热搜 五大接口路径。")
+    btn = st.button("开始跨路径检索", type="primary")
 
-# 3. 核心检索函数：根据你的 Key 权限动态切换接口
-def get_news_data(api_word, mode):
-    # 映射你的天行接口权限
+# 3. 核心检索函数：动态匹配你的所有天行接口
+def get_news_data(api_word, mode, area_name=""):
+    # 映射你拥有的所有天行接口
     endpoints = {
         "全域深度(互联网资讯)": "https://apis.tianapi.com/internet/index",
         "综合门户(综合新闻)": "https://apis.tianapi.com/generalnews/index",
-        "即时热点(国内新闻)": "https://apis.tianapi.com/guonei/index"
+        "即时热点(国内新闻)": "https://apis.tianapi.com/guonei/index",
+        "垂直地区(地区新闻)": "https://apis.tianapi.com/areanews/index",
+        "全网风向(全网热搜)": "https://apis.tianapi.com/networkhot/index"
     }
     api_url = endpoints.get(mode)
     
-    # 增加 num 到 30 篇，扩大筛选池以确保能筛出新华社/澎湃
-    params = {"key": TIAN_API_KEY, "word": api_word, "num": 30}
+    # 基础参数
+    params = {"key": TIAN_API_KEY, "num": 30} # 保持高采样率
     
-    # 如果是国内新闻接口，不支持 word 参数，需特殊处理
-    if "国内新闻" in mode:
-        params.pop("word")
+    # 根据不同模式调整参数
+    if mode == "垂直地区(地区新闻)":
+        params["areaname"] = area_name
+        # 地区新闻通常是展示该地区最新消息，有些版本不支持 word 过滤
+    elif mode == "全网风向(全网热搜)":
+        # 热搜接口通常不需要 word，返回的是当前全网最热列表
+        pass
+    elif "国内新闻" in mode:
+        pass
+    else:
+        params["word"] = api_word
         
     try:
         response = requests.get(api_url, params=params, timeout=15).json()
@@ -55,45 +79,49 @@ def get_news_data(api_word, mode):
 # 4. 主逻辑
 if btn:
     status_text = st.empty()
-    status_text.info(f"正在通过『{search_mode}』接口检索关于『{word}』的权威报道...")
+    status_text.info(f"正在通过『{search_mode}』路径检索相关资讯...")
     
     # 定义主流权威媒体关键词
     mainstream_keywords = ["新华", "澎湃", "人民网", "央视", "界面", "财新", "经济日报", "中国新闻网", "光明网", "中国证券报"]
     
-    res = get_news_data(word, search_mode)
+    res = get_news_data(word, search_mode, area)
     
-    # 保底逻辑：如果当前接口没搜到，自动尝试其他接口或返回热搜
+    # 自动保底：如果特定搜索无结果，自动转为国内热点
     if res.get("code") == 250:
-        st.warning(f"当前接口暂无『{word}』深度报道，正在为您检索全网即时热点...")
+        st.warning(f"当前路径未检索到『{word}』深度结果，已为您切换至全局即时资讯...")
         res = get_news_data(word, "即时热点(国内新闻)")
 
     if res.get("code") == 200:
         all_news = res["result"]["newslist"]
         
-        # 核心筛选逻辑：优先提取白名单中的媒体
-        high_quality_news = [n for n in all_news if any(m in n['source'] for m in mainstream_keywords)]
+        # 筛选逻辑
+        high_quality_news = [n for n in all_news if any(m in n.get('source', '') for m in mainstream_keywords)]
         other_news = [n for n in all_news if n not in high_quality_news]
-        
-        # 重新组合：主流媒体置顶
         final_list = (high_quality_news + other_news)[:num_limit]
 
-        status_text.success(f"已为您精选主流媒体报道：")
+        status_text.success(f"检索完成，正在生成内参简报：")
 
         for news in final_list:
             with st.container(border=True):
-                is_mainstream = any(m in news['source'] for m in mainstream_keywords)
-                tag = "🔴【权威主流】" if is_mainstream else "⚪【门户转播】"
+                # 处理不同接口字段名不一致的问题
+                title = news.get('title') or news.get('keyword') or "无标题"
+                source = news.get('source') or "全网热搜"
+                content = news.get('description') or news.get('digest') or f"当前全网热议关键词：{title}"
+                ctime = news.get('ctime') or "实时更新"
                 
-                # AI 编写内参
+                is_mainstream = any(m in source for m in mainstream_keywords)
+                tag = "🔴【权威主流】" if is_mainstream else "⚪【动态资讯】"
+                
+                # AI 提示词（针对不同来源自适应）
                 prompt = f"""
                 你是一位资深时政编辑。请根据以下素材撰写一份专业内参。
                 1. 主标题：12字以内，严肃客观。
-                2. 副标题：15字以内，点明核心要素。
-                3. 深度总结：100字左右，通稿风格。
+                2. 副标题：15字以内，点明事实。
+                3. 总结：100字左右，通稿风格，逻辑清晰。
                 
-                素材来源：{news['source']}
-                素材标题：{news['title']}
-                素材内容：{news['description']}
+                素材来源：{source}
+                素材标题：{title}
+                素材内容：{content}
                 """
                 
                 try:
@@ -105,12 +133,13 @@ if btn:
                     
                     col1, col2 = st.columns([1, 4])
                     with col1:
-                        st.write(f"**{news['source']}**")
-                        st.caption(f"{news['ctime']}")
+                        st.write(f"**{source}**")
+                        st.caption(ctime)
                         st.caption(tag)
                     with col2:
                         st.markdown(completion.choices[0].message.content)
-                        st.markdown(f"🔗 [查看原发报道]({news['url']})")
+                        if news.get('url'):
+                            st.markdown(f"🔗 [查看原发报道]({news['url']})")
                 except:
                     st.error("AI 总结服务暂时繁忙")
         
