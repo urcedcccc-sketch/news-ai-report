@@ -7,12 +7,12 @@ try:
     OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
     TIAN_API_KEY = st.secrets["TIAN_API_KEY"]
 except Exception as e:
-    st.error("密钥配置未就绪，请在 Streamlit Secrets 中检查。")
+    st.error("密钥配置错误，请检查 Secrets。")
     st.stop()
 
 client = OpenAI(api_key=OPENAI_API_KEY)
 
-# 页面设置
+# 页面配置
 st.set_page_config(page_title="实时全域新闻内参系统", layout="wide")
 st.title("🗞️ 实时全域新闻内参系统")
 
@@ -24,10 +24,12 @@ with st.sidebar:
         ["全网风向(全网热搜)", "垂直地区(地区新闻)", "全域深度(互联网资讯)", "综合门户(综合新闻)"]
     )
     
+    # 初始化变量
     word = ""
     area = ""
+    
     if search_mode == "全网风向(全网热搜)":
-        st.success("🔥 实时热搜模式：已自动连接全网热榜。")
+        st.success("🔥 实时模式：自动连接全网热点。")
     elif search_mode == "垂直地区(地区新闻)":
         area = st.text_input("指定地区", "新疆")
         word = st.text_input("在结果中筛选(可选)", "")
@@ -35,10 +37,11 @@ with st.sidebar:
         word = st.text_input("输入核心关键词", "马斯克")
 
     num_limit = st.slider("展示篇数", 1, 20, 10)
-    btn = st.button("获取实时资讯", type="primary")
+    btn = st.button("同步实时数据", type="primary")
 
-# 3. 核心检索函数（优化参数逻辑）
-def get_tian_api_data(mode, kw, ar):
+# 3. 核心检索函数：严格物理隔离参数
+def get_clean_data(mode, kw, ar):
+    # 接口地址映射
     endpoints = {
         "全网风向(全网热搜)": "https://apis.tianapi.com/networkhot/index",
         "垂直地区(地区新闻)": "https://apis.tianapi.com/areanews/index",
@@ -46,78 +49,77 @@ def get_tian_api_data(mode, kw, ar):
         "综合门户(综合新闻)": "https://apis.tianapi.com/generalnews/index"
     }
     api_url = endpoints.get(mode)
-    params = {"key": TIAN_API_KEY, "num": 50} # 获取较大数据池
     
-    # 策略：针对不同接口严格限制参数，防止 250 错误
+    # 基础参数：只包含 Key 和数量
+    base_params = {"key": TIAN_API_KEY, "num": 50}
+    
+    # --- 关键修复：根据模式严格构建参数字典，不留空键 ---
     if mode == "全网风向(全网热搜)":
-        pass # 热搜不需要任何参数
+        final_params = base_params # 绝对不传 word 或 areaname
     elif mode == "垂直地区(地区新闻)":
-        params["areaname"] = ar # 仅传递地区名，不传递关键词，提高成功率
+        final_params = base_params
+        final_params["areaname"] = ar.strip() # 仅传地区
+        # 即使有 kw 也不传给接口，留在本地代码过滤，防止接口报 250
     else:
-        params["word"] = kw
+        final_params = base_params
+        final_params["word"] = kw.strip()
         
     try:
-        return requests.get(api_url, params=params, timeout=10).json()
+        response = requests.get(api_url, params=final_params, timeout=10)
+        return response.json()
     except:
-        return {"code": 500, "msg": "网络请求超时"}
+        return {"code": 500, "msg": "网络请求异常"}
 
 # 4. 主渲染逻辑
 if btn:
     status = st.empty()
-    status.info(f"正在调取『{search_mode}』实时数据...")
+    status.info(f"正在调取『{search_mode}』实时底层数据...")
     
-    # 执行初次检索
-    res = get_tian_api_data(search_mode, word, area)
+    res = get_clean_data(search_mode, word, area)
     
-    # 保底机制：如果精准检索无结果，尝试宽泛检索
-    if res.get("code") == 250 and word:
-        status.warning(f"精准检索未匹配，正在为您扩大扫描范围...")
-        # 提取关键词的首个词进行保底尝试（例如“马斯克 访谈”变为“马斯克”）
-        base_word = word.split()[0] if " " in word else word
-        res = get_tian_api_data(search_mode, base_word, area)
-
+    # 逻辑分流处理
     if res.get("code") == 200:
-        raw_list = res.get("result", {}).get("newslist", [])
+        raw_news = res.get("result", {}).get("newslist", [])
         
-        # 本地筛选逻辑（仅在用户输入了过滤词时启用）
+        # 本地二次过滤（仅针对有筛选需求的场景）
         if search_mode == "垂直地区(地区新闻)" and word:
-            display_list = [n for n in raw_list if word.lower() in str(n).lower()][:num_limit]
-            if not display_list: display_list = raw_list[:num_limit] # 筛选无果则显示全部
+            display_list = [n for n in raw_news if word.lower() in str(n).lower()]
+            if not display_list: display_list = raw_news # 没搜到就给全部，不留白
         else:
-            display_list = raw_list[:num_limit]
+            display_list = raw_news
+            
+        display_list = display_list[:num_limit]
 
         if not display_list:
-            st.warning("接口数据暂时为空，请换个关键词或稍后再试。")
+            st.warning("接口返回数据为空。可能原因：该地区暂无新闻或天行库延迟。")
         else:
-            status.success(f"实时数据获取成功（共 {len(display_list)} 条）")
+            status.success(f"同步成功：获取到 {len(display_list)} 条实时资讯")
             for news in display_list:
                 with st.container(border=True):
-                    # 字段自适应适配
+                    # 字段兼容性适配
                     title = news.get('title') or news.get('keyword') or "实时动态"
-                    source = news.get('source') or "实时热榜"
-                    content = news.get('description') or news.get('digest') or f"关注：{title}"
-                    ctime = news.get('ctime') or "刚刚"
+                    source = news.get('source') or ("实时热搜" if search_mode == "全网风向(全网热搜)" else "资讯快报")
+                    desc = news.get('description') or news.get('digest') or f"关键词: {title}"
                     
                     col1, col2 = st.columns([1, 4])
                     with col1:
                         st.write(f"**{source}**")
-                        st.caption(ctime)
+                        st.caption(news.get('ctime', '刚刚'))
                     with col2:
-                        # AI 处理逻辑
-                        try:
-                            # 仅对有内容的新闻进行简报，热搜词直接显示
-                            if search_mode == "全网风向(全网热搜)":
-                                st.markdown(f"### {title}")
-                            else:
-                                prompt = f"请根据素材写12字内标题和80字内内参总结：\n标题：{title}\n素材：{content}"
-                                completion = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":prompt}])
+                        # 只有在非热搜模式下且有描述时，才调用 AI，提高加载速度
+                        if search_mode != "全网风向(全网热搜)" and len(desc) > 20:
+                            try:
+                                prompt = f"撰写12字内标题和80字内简报：\n标题：{title}\n素材：{desc}"
+                                ai_res = client.chat.completions.create(model="gpt-4o-mini", messages=[{"role":"user","content":prompt}])
                                 st.markdown(f"**{title}**")
-                                st.info(completion.choices[0].message.content)
-                        except:
-                            st.markdown(f"**{title}**")
-                            st.write(content)
+                                st.info(ai_res.choices[0].message.content)
+                            except:
+                                st.markdown(f"**{title}**")
+                                st.write(desc)
+                        else:
+                            st.markdown(f"### {title}")
+                            st.write(desc)
                         
-                        if news.get('url'):
-                            st.markdown(f"🔗 [查看详情]({news['url']})")
+                        if news.get('url'): st.markdown(f"🔗 [阅读原文]({news['url']})")
     else:
-        st.error(f"接口获取失败。状态码：{res.get('code')}，原因：{res.get('msg')}")
+        st.error(f"调取失败。代码：{res.get('code')}，信息：{res.get('msg')}")
