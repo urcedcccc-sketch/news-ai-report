@@ -47,26 +47,37 @@ def get_news_data(api_word, mode, area_name=""):
         "全域深度(互联网资讯)": "https://apis.tianapi.com/internet/index",
         "综合门户(综合新闻)": "https://apis.tianapi.com/generalnews/index",
         "即时热点(国内新闻)": "https://apis.tianapi.com/guonei/index",
-        "垂直地区(地区新闻)": "https://apis.tianapi.com/areanews/index",
-        "全网风向(全网热搜)": "https://apis.tianapi.com/networkhot/index"
+        "垂直地区(地区新闻)": "https://apis.tianapi.com/areanews/index"
     }
     api_url = endpoints.get(mode)
-    
-    # 策略升级：强制拉取50条数据进入缓存池进行本地筛选
     params = {"key": TIAN_API_KEY, "num": 50}
     
+    # --- 核心修复：针对地区新闻切换参数 ---
     if mode == "垂直地区(地区新闻)":
-        params["areaname"] = area_name
-    elif mode == "全网风向(全网热搜)" or "国内新闻" in mode:
-        pass
+        params["areaname"] = area_name  # 使用正确的地区参数名
+        # 地区新闻模式下，如果不输入具体关键词，API会返回该地所有最新新闻
+        if api_word and api_word != area_name: 
+            params["word"] = api_word
     else:
         params["word"] = api_word
         
     try:
-        response = requests.get(api_url, params=params, timeout=15).json()
-        return response
+        return requests.get(api_url, params=params, timeout=15).json()
     except:
-        return {"code": 500, "msg": "网络请求超时"}
+        return {"code": 500}
+
+# --- 在主逻辑显示部分 ---
+if btn:
+    # ... 之前的代码 ...
+    if isinstance(res, dict) and res.get("code") == 200:
+        all_raw_news = res.get("result", {}).get("newslist", [])
+        
+        # 智能过滤：如果搜的是地区名本身，就不再强制标题必须包含该词，防止误删
+        if word == area:
+            final_pool = all_raw_news
+        else:
+            target_news = [n for n in all_raw_news if word.lower() in n.get('title', '').lower()]
+            final_pool = target_news if target_news else all_raw_news
 
 # 4. 主逻辑
 if btn:
