@@ -11,6 +11,7 @@ except Exception as e:
     st.error("密钥配置错误，请检查 Streamlit Secrets。")
     st.stop()
 
+# 初始化客户端 (适配 ZhipuAI 或 OpenAI)
 client = OpenAI(api_key=OPENAI_API_KEY)
 
 # 页面设置
@@ -18,7 +19,7 @@ st.set_page_config(page_title="全域智能内参系统", layout="wide")
 st.title("🗞️ 全域智能内参系统")
 st.caption("多源并发检索 | 自动聚合提炼 | 严格 7 天时效")
 
-# 2. 侧边栏配置 (UI 极简优化)
+# 2. 侧边栏配置
 with st.sidebar:
     st.header("检索设置")
     word = st.text_input("请输入核心关键词", "伊朗")
@@ -33,6 +34,7 @@ def is_within_a_week(date_str):
     """时效拦截：确保只有7天内的新闻能通过"""
     if not date_str: return False
     try:
+        # 处理多种时间格式
         fmt = "%Y-%m-%d %H:%M:%S" if ":" in date_str else "%Y-%m-%d"
         news_date = datetime.strptime(date_str[:19], fmt)
         return datetime.now() - news_date <= timedelta(days=7)
@@ -40,7 +42,7 @@ def is_within_a_week(date_str):
         return True
 
 def fetch_all_sources(kw):
-    """核心：后台并发检索四大接口"""
+    """后台并发检索四大接口"""
     endpoints = {
         "国际新闻": "https://apis.tianapi.com/world/index",
         "国内新闻": "https://apis.tianapi.com/guonei/index",
@@ -50,7 +52,6 @@ def fetch_all_sources(kw):
     
     aggregated_news = []
     
-    # 逐一请求接口并打上来源标签
     for name, url in endpoints.items():
         params = {"key": TIAN_API_KEY, "num": 30, "word": kw.strip()}
         try:
@@ -58,12 +59,12 @@ def fetch_all_sources(kw):
             if res.get("code") == 200:
                 news_list = res.get("result", {}).get("newslist", [])
                 for n in news_list:
-                    n["source_tag"] = name # 标记数据来自哪个接口
+                    n["source_tag"] = name 
                 aggregated_news.extend(news_list)
         except:
             continue
             
-    # 按时间倒序排列 (最新的在前)
+    # 按时间倒序排列
     aggregated_news.sort(key=lambda x: x.get('ctime', ''), reverse=True)
     return aggregated_news
 
@@ -87,51 +88,54 @@ if btn:
     else:
         status.success(f"✅ 全域同步成功：已从四大源中提炼出 {len(final_list)} 条本周高价值内参")
         
+        # --- 修复后的循环缩进部分 ---
         for news in final_list:
-    with st.container(border=True):
-        title = news.get('title', '无标题')
-        source = news.get('source', '权威媒体')
-        tag = news.get('source_tag', '未知分类')
-        ctime = news.get('ctime', '刚刚')
-        
-        # 优化点 1：获取真实素材，如果为空则使用标题兜底
-        desc = news.get('description') or news.get('digest')
-        raw_desc = desc if desc and len(desc) > 10 else "暂无详细正文"
-        
-        col1, col2 = st.columns([1, 4])
-        with col1:
-            st.write(f"**{source}**")
-            st.caption(f"📅 {ctime}")
-            st.caption(f"📂 分类：{tag}")
-        with col2:
-            # 优化点 2：只有当素材字数足够时才调用 AI
-            if desc and len(desc) > 20:
-                try:
-                    # 改进的提示词：强调严谨性，减少误导
-                    prompt = (
-                        f"你是一名称职的新闻编辑。请针对以下素材进行提炼：\n"
-                        f"【标题】：{title}\n"
-                        f"【正文】：{desc}\n"
-                        f"要求：严格基于正文，写一段100字以内的深度总结，要求包含事件核心和潜在影响。若正文内容不足，请直接概括标题。"
-                    )
+            with st.container(border=True):
+                title = news.get('title', '无标题')
+                source = news.get('source', '权威媒体')
+                tag = news.get('source_tag', '未知分类')
+                ctime = news.get('ctime', '刚刚')
+                
+                # 获取素材内容，处理为空的情况
+                desc = news.get('description') or news.get('digest')
+                # 过滤掉一些无意义的占位符
+                raw_desc = desc if (desc and len(desc) > 10 and "内容详见" not in desc) else "暂无详细内容"
+                
+                col1, col2 = st.columns([1, 4])
+                with col1:
+                    st.write(f"**{source}**")
+                    st.caption(f"📅 {ctime}")
+                    st.caption(f"📂 分类：{tag}")
+                
+                with col2:
+                    # 只有素材长度足够才调用 AI，否则显示原文摘要
+                    if desc and len(desc) > 30:
+                        try:
+                            prompt = (
+                                f"你是一名称职的新闻编辑。请针对以下素材进行提炼：\n"
+                                f"【标题】：{title}\n"
+                                f"【来源】：{source}\n"
+                                f"【正文】：{desc}\n\n"
+                                f"要求：严格基于提供的正文内容，写一段80-100字的深度总结。要求包含事件核心和潜在影响。若正文内容不足或不相关，请仅对标题进行简要扩充，不要编造。"
+                            )
+                            
+                            completion = client.chat.completions.create(
+                                model="gpt-4o-mini",
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0.2 # 低随机性，保证严谨
+                            )
+                            st.markdown(f"### {title}")
+                            st.info(completion.choices[0].message.content)
+                        except Exception as e:
+                            st.markdown(f"### {title}")
+                            st.write(raw_desc)
+                    else:
+                        # 素材过短的情况，直接展示标题和摘要
+                        st.markdown(f"### {title}")
+                        st.write(f"📢 **内参简报**：{raw_desc}")
+                        st.caption("⚠️ 原始正文较短，详细深度内容请阅读原发报道。")
                     
-                    completion = client.chat.completions.create(
-                        model="gpt-4o-mini",
-                        messages=[{"role": "user", "content": prompt}],
-                        temperature=0.2 # 调低随机性，减少幻觉
-                    )
-                    st.markdown(f"### {title}")
-                    st.info(completion.choices[0].message.content)
-                except:
-                    st.markdown(f"### {title}")
-                    st.write(raw_desc)
-            else:
-                # 素材太少，直接显示标题和原文摘要，不浪费 Token 且更准确
-                st.markdown(f"### {title}")
-                st.write(f"⚠️ 原始素材过短，请点击下方链接查看原文详情。")
-                st.caption(f"内容简述：{raw_desc}")
-            
-            if news.get('url'):
-                st.markdown(f"🔗 [阅读原发报道]({news['url']})")
+                    if news.get('url'):
+                        st.markdown(f"🔗 [阅读原发报道]({news['url']})")
     
     status.empty()
