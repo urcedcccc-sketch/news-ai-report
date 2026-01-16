@@ -88,34 +88,50 @@ if btn:
         status.success(f"✅ 全域同步成功：已从四大源中提炼出 {len(final_list)} 条本周高价值内参")
         
         for news in final_list:
-            with st.container(border=True):
-                title = news.get('title', '无标题')
-                source = news.get('source', '权威媒体')
-                tag = news.get('source_tag', '未知分类')
-                ctime = news.get('ctime', '刚刚')
-                desc = news.get('description') or news.get('digest') or "内容详见原文"
-                
-                col1, col2 = st.columns([1, 4])
-                with col1:
-                    st.write(f"**{source}**")
-                    st.caption(f"📅 {ctime}")
-                    st.caption(f"📂 分类：{tag}")
-                with col2:
-                    try:
-                        # 维持专业内参编写风格
-                        prompt = f"你是资深内参编辑。请根据下述素材写12字内标题和100字深度总结（需包含背景与影响）：\n来源：[{tag}]{source}\n素材：{desc}"
-                        completion = client.chat.completions.create(
-                            model="gpt-4o-mini",
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0.3
-                        )
-                        st.markdown(f"### {title}")
-                        st.info(completion.choices[0].message.content)
-                    except:
-                        st.markdown(f"### {title}")
-                        st.write(desc)
+    with st.container(border=True):
+        title = news.get('title', '无标题')
+        source = news.get('source', '权威媒体')
+        tag = news.get('source_tag', '未知分类')
+        ctime = news.get('ctime', '刚刚')
+        
+        # 优化点 1：获取真实素材，如果为空则使用标题兜底
+        desc = news.get('description') or news.get('digest')
+        raw_desc = desc if desc and len(desc) > 10 else "暂无详细正文"
+        
+        col1, col2 = st.columns([1, 4])
+        with col1:
+            st.write(f"**{source}**")
+            st.caption(f"📅 {ctime}")
+            st.caption(f"📂 分类：{tag}")
+        with col2:
+            # 优化点 2：只有当素材字数足够时才调用 AI
+            if desc and len(desc) > 20:
+                try:
+                    # 改进的提示词：强调严谨性，减少误导
+                    prompt = (
+                        f"你是一名称职的新闻编辑。请针对以下素材进行提炼：\n"
+                        f"【标题】：{title}\n"
+                        f"【正文】：{desc}\n"
+                        f"要求：严格基于正文，写一段100字以内的深度总结，要求包含事件核心和潜在影响。若正文内容不足，请直接概括标题。"
+                    )
                     
-                    if news.get('url'):
-                        st.markdown(f"🔗 [阅读原发报道]({news['url']})")
+                    completion = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=[{"role": "user", "content": prompt}],
+                        temperature=0.2 # 调低随机性，减少幻觉
+                    )
+                    st.markdown(f"### {title}")
+                    st.info(completion.choices[0].message.content)
+                except:
+                    st.markdown(f"### {title}")
+                    st.write(raw_desc)
+            else:
+                # 素材太少，直接显示标题和原文摘要，不浪费 Token 且更准确
+                st.markdown(f"### {title}")
+                st.write(f"⚠️ 原始素材过短，请点击下方链接查看原文详情。")
+                st.caption(f"内容简述：{raw_desc}")
+            
+            if news.get('url'):
+                st.markdown(f"🔗 [阅读原发报道]({news['url']})")
     
     status.empty()
